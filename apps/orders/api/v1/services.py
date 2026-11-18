@@ -1,7 +1,7 @@
-
 from django.db import transaction
-from django.core.exceptions import ValidationError
-from django.db.models import F
+from django.db.models import Sum
+from rest_framework.exceptions import ValidationError
+
 from apps.products.models import Product
 from apps.orders.models import Order, OrderItem
 
@@ -9,58 +9,60 @@ from apps.orders.models import Order, OrderItem
 @transaction.atomic
 def place_order(items):
 
-    # Combine duplicate product IDs.
+    #Combine duplicate product IDs
     quantities = {}
 
     for item in items:
         product_id = item["product_id"]
         quantity = item["quantity"]
 
-        if quantity <= 0:
-            raise ValidationError(
-                "Quantity must be greater than zero."
-            )
-
         quantities[product_id] = (
             quantities.get(product_id, 0) + quantity
         )
 
+    # Lock product rows in consistent order
     product_ids = sorted(quantities.keys())
 
-    # Lock rows in a consistent order to reduce deadlocks.
     products = list(
-        Product.objects.select_for_update()
-        .filter(
-            id__in=product_ids,
-            is_active=True
-        )
+        Product.objects
+        .select_for_update()
+        .filter(id__in=product_ids)
         .order_by("id")
     )
 
-    # Ensure every requested product exists.
-    if len(products) != len(product_ids):
-        raise ValidationError(
-            "One or more products do not exist or are inactive."
-        )
+    product_map = {
+        product.id: product
+        for product in products
+    }
+
+    # Validate all products before changing stock
+    if len(product_map) != len(product_ids):
+        raise ValidationError("One or more products do not exist.")
 
     total_amount = 0
     order_items = []
 
-    # Validate stock before changing anything.
-    for product in products:
+    for product_id, quantity in quantities.items():
 
-        quantity = quantities[product.id]
+        product = product_map[product_id]
 
-        
+        if not product.is_active:
+            raise ValidationError(
+                f"{product.name} is not available."
+            )
 
         if product.stock < quantity:
             raise ValidationError(
                 f"Insufficient stock for {product.name}. "
-                f"Available: {product.stock}"
+                f"Available: {product.stock}, Requested: {quantity}"
             )
 
         total_amount += product.price * quantity
 
+        # Prepare stock updates
+        product.stock -= quantity
+
+        # Prepare order items
         order_items.append(
             OrderItem(
                 product=product,
@@ -69,24 +71,22 @@ def place_order(items):
             )
         )
 
-    # Create the order.
-    order = Order.objects.create(
-        total_amount=total_amount,
-        status=Order.Status.CONFIRMED
+    #Update inventory
+    Product.objects.bulk_update(
+        list(product_map.values()),
+        ["stock"]
     )
 
-    # Reduce stock and create order items.
-    for product, order_item in zip(products, order_items):
+    #Create order
+    order = Order.objects.create(
+        status=Order.Status.CONFIRMED,
+        total_amount=total_amount
+    )
 
-        quantity = quantities[product.id]
+    #Create order items
+    for item in order_items:
+        item.order = order
 
-        Product.objects.filter(
-            id=product.id
-        ).update(
-            stock=F("stock") - quantity
-        )
-
-        order_item.order = order
-        order_item.save()
+    OrderItem.objects.bulk_create(order_items)
 
     return order
