@@ -1,5 +1,7 @@
 
 from django.db import models
+from django.contrib.postgres.search import SearchVectorField
+from django.contrib.postgres.indexes import GinIndex
 
 
 class Product(models.Model):
@@ -12,11 +14,17 @@ class Product(models.Model):
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
+    search_vector = SearchVectorField(null=True, editable=False)
+
     class Meta:
         indexes = [
-            models.Index(fields=["name"]),
-            models.Index(fields=["is_active"]),
-        ]
+        models.Index(fields=["name"]),
+        models.Index(fields=["is_active"]),
+        GinIndex(
+            fields=["search_vector"],
+            name="product_search_gin",
+        ),
+    ]
 
     def __str__(self):
         return self.name
