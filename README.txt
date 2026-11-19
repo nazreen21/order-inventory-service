@@ -11,25 +11,33 @@ Activate virtual environment
 py -m venv .venv
 .\.venv\Scripts\Activate.ps1
 
+What the project contains :-
+
+- core/ configures Django, database settings, and root URL routing.
+- apps/products/ contains product data, product CRUD endpoints, and PostgreSQL full-text search.
+- apps/orders/ contains orders, order items, validation, and the stock-safe order placement service.
+- apps/reports/ contains an aggregate sales report endpoint.
+- load_test.py sends concurrent order and report requests and checks the final stock count.
 
 Create a PostgreSQL database and role, then add a .env file in the repository root. The application loads this file through python-dotenv:
 
 .env contains credentials :-
 
-SECRET_KEY=replace-with-a-local-secret
+SECRET_KEY=local-secret
 DB_NAME=order_inventory
 DB_USER=order_inventory_user
-DB_PASSWORD=replace-with-your-database-password
+DB_PASSWORD=database-password
 DB_HOST=localhost
 DB_PORT=5432
 
 
 Apply migrations and start Django's development server:
 
+python manage.py makemigrations
 python manage.py migrate
 python manage.py runserver
 
-The server is available at 'http://127.0.0.1:8000/'. The Django admin is at /admin/; create an admin account with python manage.py createsuperuser if needed. 
+The server is available at 'http://127.0.0.1:8000/'. The Django admin is at /admin/; create an admin account with python manage.py createsuperuser  
 Product records can be managed through the product API or admin.
 
 API overview
@@ -45,11 +53,6 @@ POST /api/v1/orders/ -> Place an order and decrement inventory atomically
 GET -> /api/v1/orders/{id}/ -> Retrieve an order with its items 
 GET /api/v1/reports/sales/ -> Aggregate confirmed order count, revenue, and per-product sales
 
-Order creation expects a non-empty items array. Each entry contains an integer product_id and a positive integer quantity.
- Duplicate product IDs are combined before stock validation. Successful creation returns 201; invalid or unavailable products and insufficient stock return 400.
-
-The sales report optionally accepts inclusive `start_date` and `end_date` query parameters in `YYYY-MM-DD` format. It returns the confirmed order count and total revenue, along with units sold and line revenue grouped by product. Invalid dates or a start date after the end date return 400. Example: `/api/v1/reports/sales/?start_date=2026-01-01&end_date=2026-01-31`.
-
 Example:
 {
   "items": [
@@ -57,6 +60,54 @@ Example:
     {"product_id": 3, "quantity": 1}
   ]
 }
+
+Create a product in Postman with `POST /api/v1/products/`:
+{
+  "name": "Orion Laptop",
+  "description": "Portable computer for QA testing",
+  "price": "1250.00",
+  "stock": 25,
+  "is_active": true
+}
+
+
+Save the returned product ID. Search by its name or description. 
+Product list and search endpoints include active products only. The list is ordered newest first.
+
+Place an order using POST /api/v1/orders/:
+
+{
+  "items": [
+    {"product_id": 1, "quantity": 2},
+    {"product_id": 2, "quantity": 1}
+  ]
+}
+
+
+Each quantity must be a positive integer and items must be non-empty. 
+Duplicate product IDs are combined. A successful order returns 201; invalid products or insufficient stock return 400. 
+Retrieve the result with GET /api/v1/orders/{returned_order_id}/.
+
+The report can optionally be bounded by inclusive dates:
+
+GET /api/v1/reports/sales/?start_date=2026-11-01&end_date=2026-11-30
+
+Dates must use YYYY-MM-DD; invalid dates or a start date after the end date return 400. 
+The report includes confirmed order count and order revenue, plus product quantities and line revenue. 
+Line revenue is calculated from the saved order-item unit price multiplied by quantity, so later product price changes do not rewrite historical sales.
+
+ Design decisions and trade-offs
+
+ Order consistency under concurrency
+
+apps/orders/api/v1/services.py wraps order creation in transaction.atomic. 
+It combines repeated product IDs, locks the affected product rows with select_for_update() in ascending ID order, validates active status and stock,
+then updates stock and creates the order and items in that transaction.
+
+The row locks prevent two concurrent orders from both reading and consuming the same remaining stock. 
+Locking in a consistent order reduces deadlock risk for orders containing overlapping products. 
+The transaction ensures a failure rolls back the inventory and order changes together. 
+The trade-off is that competing requests for a popular product wait for its row lock.
 
 Architecture
 
@@ -115,17 +166,6 @@ A load test sends several requests at once to check two things:
 
 The script tests two things at once: whether concurrent orders can oversell one product, 
 and whether sales-report requests still finish while those orders are running.
-
-ThreadPoolExecutor runs multiple requests concurrently using a pool of threads. 
-Event releases the waiting workers; 
-and urllib sends HTTP requests.
-
-send(method, url, payload=None): Builds and sends one HTTP request. 
-It records how long it takes and returns the HTTP status, elapsed time, and response body. 
-HTTP errors such as 400 are recorded as responses; connection errors are returned with status 0.
-
-percentile(values, percent): Sorts the measured request times and selects a value near the requested percentile.
-The p95 is a useful way to describe the slower end of this run’s response times.
 
 Command-line arguments: 
 --product-id selects the test product; 
