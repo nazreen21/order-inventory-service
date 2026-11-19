@@ -6,7 +6,6 @@ from apps.products.models import Product
 class Order(models.Model):
 
     class Status(models.TextChoices):
-        PENDING = "PENDING", "Pending"
         CONFIRMED = "CONFIRMED", "Confirmed"
         CANCELLED = "CANCELLED", "Cancelled"
 
@@ -38,7 +37,7 @@ class OrderItem(models.Model):
                 name="order_item_quantity_positive"
             )
         ]
-
+    #Calculates the total price for one order item.
     @property
     def subtotal(self):
         return self.unit_price * self.quantity
