@@ -10,7 +10,7 @@ from django.db.models import F
 
 class ProductViewSet(viewsets.ModelViewSet):
     serializer_class = ProductSerializer
-    queryset = Product.objects.all()
+    queryset = Product.objects.all().order_by("-created_at", "-id")
 
     def get_queryset(self):
         qs = super().get_queryset()

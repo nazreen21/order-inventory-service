@@ -60,7 +60,7 @@ Example:
 
 Architecture
 
-- core/ contains Django settings and root URL routing. It mounts versioned order and product APIs.
+- core/ contains Django settings and root URL routing. It mounts versioned order, product, and report APIs.
 - apps/products/ owns the product model and product API. Its model holds stock, price, active status, and the search vector.
 - apps/orders/ owns order and order-item models, request/response serializers, API views, and the place_order service. 
   The service encapsulates the inventory and order write as one transaction.
@@ -89,7 +89,14 @@ Product.search_vector stores preprocessed tokens, and a GIN index supports match
 A database trigger maintains the vector when product name or description changes, including updates made outside Django; 
 a migration backfills existing rows. The search API parses input with PostgreSQL's english websearch query syntax and ranks matching active products with SearchRank.
 
-This keeps search and product data in the same database, avoids operating another service, and provides stemming, query syntax, indexed matching, and relevance ordering. The English text configuration is language-specific, and full-text search matches tokenized terms rather than arbitrary substrings or typo variants. Those limits are acceptable for the current product catalog; multilingual, fuzzy, or advanced faceted search would call for additional indexing or a dedicated search system. Search results currently have no explicit pagination or rank threshold.
+This keeps search and product data in the same database, avoids operating another service, and provides stemming, 
+query syntax, indexed matching, and relevance ordering. 
+The English text configuration is language-specific, and full-text search matches tokenized terms rather than arbitrary substrings or typo variants. 
+Those limits are acceptable for the current product catalog; 
+multilingual, fuzzy, or advanced faceted search would call for additional indexing or a dedicated search system. 
+Search results currently have no explicit pagination or rank threshold.
+
+
 
 Configuration notes
 
@@ -106,11 +113,10 @@ The report calculates each product’s revenue as unit_price × quantity, then s
 
 A load test sends several requests at once to check two things:
 
-1. Stock stays correct: concurrent orders must never sell more than the available stock.
-2. The API stays responsive: reporting requests should still complete while orders are being placed.
-Postman is useful for trying individual requests. For concurrent requests, use a small scrip
+The script tests two things at once: whether concurrent orders can oversell one product, 
+and whether sales-report requests still finish while those orders are running.
 
-ThreadPoolExecutor runs requests concurrently; 
+ThreadPoolExecutor runs multiple requests concurrently using a pool of threads. 
 Event releases the waiting workers; 
 and urllib sends HTTP requests.
 
@@ -134,3 +140,17 @@ I ran python load_test.py --product-id 5 --attempts 100 --reports 10 --workers 2
 The run returned 25 successful orders, 75 stock-related rejections, and final stock 0. 
 All 10 report requests returned successfully.
 Measured latency was p50 0.051s and p95 0.541s. No unexpected order statuses or failed reports occurred.
+
+Run the full stack with Docker Compose
+
+Prerequisite: install and start Docker Desktop (or Docker Engine with the Compose plugin). From the repository root, run:
+
+docker compose up --build
+
+Compose builds the Django image, starts PostgreSQL, waits for its health check, applies Django migrations, and starts the API at http://127.0.0.1:8000/. The PostgreSQL data is kept in the named Docker volume `postgres_data_v2`.
+
+The Compose file has development-only fallback credentials so the command works without a local `.env` file. To override them, create an ignored `.env` file using the variable names shown below. Do not use these local defaults outside a disposable development environment.
+
+How Docker Compose works
+
+Docker Compose builds the Django application image from the Dockerfile and runs the application and PostgreSQL in separate containers. It waits for PostgreSQL's health check before starting Django. The application connects to the database using the Compose service name `db` and the database settings supplied as environment variables. On startup, Django applies migrations and then serves the API on port 8000, available from the host at http://127.0.0.1:8000/. PostgreSQL stores its data in the `postgres_data` named volume, which persists when the containers stop. This makes the local environment repeatable without installing Python dependencies or PostgreSQL directly on the host.

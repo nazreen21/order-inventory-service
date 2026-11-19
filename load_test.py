@@ -7,7 +7,7 @@ from threading import Event
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
-
+# send a HTTP request
 def send(method, url, payload=None):
     data = json.dumps(payload).encode() if payload is not None else None
     request = Request(
@@ -52,7 +52,7 @@ def main():
     product_url = f"{base}/api/v1/products/{args.product_id}/"
     order_url = f"{base}/api/v1/orders/"
     report_url = f"{base}/api/v1/reports/sales/"
-
+    # Check the product and its stock
     status, _, body = send("GET", product_url)
     if status != 200:
         raise SystemExit(f"Could not read product: HTTP {status}: {body}")
@@ -63,7 +63,7 @@ def main():
             f"Use more attempts than stock to test overselling. "
             f"Stock={initial_stock}, attempts={args.attempts}"
         )
-
+    # define concurrent request jobs
     gate = Event()
 
     def place_one_order():
@@ -77,7 +77,7 @@ def main():
     def request_report():
         gate.wait()
         return send("GET", report_url)
-
+    # run request concurrently
     with ThreadPoolExecutor(max_workers=args.workers) as pool:
         futures = [
             pool.submit(place_one_order) for _ in range(args.attempts)
@@ -105,7 +105,7 @@ def main():
         for status, _, body in report_results
         if status != 200
     ]
-
+    # Check final stock and print measurements
     status, _, body = send("GET", product_url)
     if status != 200:
         raise SystemExit(f"Could not read final stock: HTTP {status}: {body}")
